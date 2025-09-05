@@ -222,9 +222,9 @@ class SpectralGap:
         if save_matrix:
             if self.sampler.method == "quantum":
                 if not self.sampler.gamma_ranges:
-                    filename = f"{self.sampler.method}_{self.sampler.n}_{self.sampler.dimension}_{self.sampler.gamma_TC}_{self.sampler.gamma_BD}_{self.sampler.gamma_mixing}.pkl"
+                    filename = f"{self.sampler.method}_{self.sampler.n}_{self.sampler.dimension}_{self.sampler.gamma_TC}_{self.sampler.gamma_BD}_{self.sampler.gamma_mixing}_{self.sampler.num_qubits}.pkl"
                 else:
-                    filename = f"{self.sampler.method}_{self.sampler.n}_{self.sampler.dimension}_range_{self.sampler.TC_gamma_ratio[0]}_{self.sampler.TC_gamma_ratio[1]}_{self.sampler.BD_gamma_ratio[0]}_{self.sampler.BD_gamma_ratio[1]}.pkl"
+                    filename = f"{self.sampler.method}_{self.sampler.n}_{self.sampler.dimension}_range_{self.sampler.TC_gamma_ratio[0]}_{self.sampler.TC_gamma_ratio[1]}_{self.sampler.BD_gamma_ratio[0]}_{self.sampler.BD_gamma_ratio[1]}_{self.sampler.num_qubits}.pkl"
             else:
                 moves_str = "both" if 0 in self.sampler.moves and 1 in self.sampler.moves else ("link" if 0 in self.sampler.moves else "relation")
                 filename = f"{self.sampler.method}_{self.sampler.n}_{self.sampler.dimension}_{moves_str}.pkl"
@@ -234,7 +234,7 @@ class SpectralGap:
             
             # Load from cache if it exists
             if os.path.exists(Q_filepath):
-                print("Loading cached Q matrix from:", Q_filepath, flush=True)
+                #print("Loading cached Q matrix from:", Q_filepath, flush=True)
                 with open(Q_filepath, "rb") as f:
                     Q = pickle.load(f)
                 self.sampler.Q = np.copy(Q)

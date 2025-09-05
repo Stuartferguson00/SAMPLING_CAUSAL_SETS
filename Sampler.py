@@ -12,7 +12,7 @@ import numpy.typing as npt
 from tqdm import tqdm
 from qiskit_qulacs.qulacs_estimator import QulacsEstimator
 from helpers import transitive_closure, transitive_reduction, is_causal_matrix, calculate_action, get_unique_matrices, transitive_closure, get_upper_triangular_basis, num_relations, height, ordering_fraction, minimal_elements, is_critical_pair, is_suitable_pair, is_linked
-
+import matplotlib.pyplot as plt
 class Sampler:
     """
     Sampler class for generating samples of causal sets using quantum or classical methods.
@@ -216,12 +216,26 @@ class Sampler:
 
                 self.alpha_TC = self.get_alpha_TC()
                 self.alpha_BD = self.get_alpha_BD()
-                
+
+
             else:
                 raise ValueError("Gammas or gamma ratios must be specified.")
             
-            
+            if "num_qubits" in qargs:
+                self.num_qubits = qargs["num_qubits"]
+                if self.num_qubits <= 0 or self.num_qubits > self.q:
+                    raise ValueError("Number of qubits must be a positive integer less than or equal to the total number of qubits.")
+
+            else:
+                self.num_qubits = self.q
                 
+                
+                
+            self.number_of_qubits_to_use = int(self.num_qubits)
+            
+            if self.number_of_qubits_to_use != self.q and self.verbose:
+                print("Using ", self.num_qubits, " qubits out of ", self.q)
+            
             if "t" in qargs:
                 t = qargs["t"]
                 if type(t) == int:
@@ -428,6 +442,13 @@ class Sampler:
 
         """
         
+        if self.number_of_qubits_to_use == self.q:
+            pass
+        elif self.number_of_qubits_to_use < self.q:
+            raise NotImplementedError("Coarse graining for BD circuit not yet implemented.")  
+            
+
+        
         if gamma_BD == 0 and return_circuit is True:
             raise ValueError("gamma_BD must be nonzero.")
         
@@ -590,6 +611,10 @@ class Sampler:
         Returns:
             QuantumCircuit: The constructed quantum circuit after decomposition.
         """
+        
+        
+        
+        
         if trivial_terms:
             raise ValueError("Trivial terms not yet implemented.")
 
@@ -606,53 +631,175 @@ class Sampler:
         
         # Using operator like this is probably very inefficient re. matrix exponential. But will work for now.
         # Using sparse pauli op is definately better
-        circuit = QuantumCircuit(self.q)
+        circuit = QuantumCircuit(self.number_of_qubits_to_use)
         pauli_list = []
+        coeff_list = []
         count = 0
         for i in range(self.n):
             for j in range(i+1, self.n):
                 for k in range(j+1, self.n):
-
+                    
                     one_body_terms = [[i,j],[j,k],[i,k]]
                     one_body_signs = [2,2,0]
                     # One body terms
                     for l in range(3):
+                        sign_evo_time = 1
+                        Z_string = np.zeros(self.number_of_qubits_to_use)
                         
-                        Z_string = np.zeros(self.q)
-                        Z_string[basis[one_body_terms[l][0],one_body_terms[l][1]]] = 1
-                        operator = Pauli((Z_string, np.zeros(self.q), one_body_signs[l]))
-                        circuit = self.add_evo_to_circuit(circuit, operator, time = evo_time)
+                        # If one_body_terms[l] corresponds to a qubit we are coarse graining away, then skip this term
+                        if basis[one_body_terms[l][0],one_body_terms[l][1]] in self.inverted_chosen_qubits:
+                            qubit_to_act_on = np.where(self.inverted_chosen_qubits == basis[one_body_terms[l][0],one_body_terms[l][1]])[0][0]
+                            Z_string[qubit_to_act_on] = 1
+                        else:
+                            sign_evo_time *= (1-2*int(self.current_s_[basis[one_body_terms[l][0],one_body_terms[l][1]]]))
+
+                        operator = Pauli((Z_string, np.zeros(self.number_of_qubits_to_use), one_body_signs[l]))
+                        circuit = self.add_evo_to_circuit(circuit, operator, time = sign_evo_time*evo_time)
                         pauli_list.append(operator)
+                        coeff_list.append(sign_evo_time)
                     
                     two_body_terms = [[[i,j],[j,k]],[[i,j],[i,k]],[[j,k],[i,k]]]
                     two_body_signs = [0,2,2]
                     # Two body terms
                     for l in range(3):
-                        Z_string = np.zeros(self.q)
+                        Z_string = np.zeros(self.number_of_qubits_to_use)
                         #print(" ")
                         #print(two_body_terms[l][0][0])
-                        Z_string[basis[two_body_terms[l][0][0],two_body_terms[l][0][1]]] = 1
-                        Z_string[basis[two_body_terms[l][1][0],two_body_terms[l][1][1]]] = 1
-                        operator = Pauli((Z_string, np.zeros(self.q), two_body_signs[l]))
-                        circuit = self.add_evo_to_circuit(circuit, operator, time = evo_time)
+                        sign_evo_time = 1
+                        # If two_body_terms[l][0] corresponds to a qubit we are coarse graining away, then skip this term
+                        if basis[two_body_terms[l][0][0],two_body_terms[l][0][1]] in self.inverted_chosen_qubits:
+                            qubit_to_act_on = np.where(self.inverted_chosen_qubits == basis[two_body_terms[l][0][0],two_body_terms[l][0][1]])[0][0]
+                            Z_string[qubit_to_act_on] = 1
+                        else:
+                            sign_evo_time *= (1-2*int(self.current_s_[basis[two_body_terms[l][0][0],two_body_terms[l][0][1]]]))
+                        
+                        # If two_body_terms[l][1] corresponds to a qubit we are coarse graining away, then skip this term
+                        if basis[two_body_terms[l][1][0],two_body_terms[l][1][1]] in self.inverted_chosen_qubits:
+                            qubit_to_act_on = np.where(self.inverted_chosen_qubits == basis[two_body_terms[l][1][0],two_body_terms[l][1][1]])[0][0]
+                            Z_string[qubit_to_act_on] = 1
+                        else:
+                            sign_evo_time *= (1-2*int(self.current_s_[basis[two_body_terms[l][1][0],two_body_terms[l][1][1]]]))
+                        
+                        operator = Pauli((Z_string, np.zeros(self.number_of_qubits_to_use), two_body_signs[l]))
+                        circuit = self.add_evo_to_circuit(circuit, operator, time = sign_evo_time*evo_time)
                         pauli_list.append(operator)
+                        coeff_list.append(sign_evo_time)
                     
                     
                     #three body terms
-                    Z_string = np.zeros(self.q)
-                    Z_string[basis[i,j]] = 1
-                    Z_string[basis[j,k]] = 1
-                    Z_string[basis[i,k]] = 1
-                    operator = Pauli((Z_string, np.zeros(self.q), 0))
-                    circuit = self.add_evo_to_circuit(circuit, operator, time = evo_time)
+                    Z_string = np.zeros(self.number_of_qubits_to_use)
+                    sign_evo_time = 1
+                    
+                    # If [i,j] corresponds to a qubit we are coarse graining away, then skip this term
+                    if basis[i,j] in self.inverted_chosen_qubits:
+                        qubit_to_act_on = np.where(self.inverted_chosen_qubits == basis[i,j])[0][0]
+                        Z_string[qubit_to_act_on] = 1
+                    else:
+                        sign_evo_time *= (1-2*int(self.current_s_[basis[i,j]]))
+                    
+                    # If [j,k] corresponds to a qubit we are coarse graining away, then skip this term
+                    if basis[j,k] in self.inverted_chosen_qubits:
+                        qubit_to_act_on = np.where(self.inverted_chosen_qubits == basis[j,k])[0][0]
+                        Z_string[qubit_to_act_on] = 1
+                    else:
+                        sign_evo_time *=(1-2*int(self.current_s_[basis[j,k]]))
+
+                    # If [i,k] corresponds to a qubit we are coarse graining away, then skip this term
+                    if basis[i,k] in self.inverted_chosen_qubits:
+                        qubit_to_act_on = np.where(self.inverted_chosen_qubits == basis[i,k])[0][0]
+                        Z_string[qubit_to_act_on] = 1
+                    else:
+                        sign_evo_time *= (1-2*int(self.current_s_[basis[i,k]]))
+
+                    operator = Pauli((Z_string, np.zeros(self.number_of_qubits_to_use), 0))
+                    circuit = self.add_evo_to_circuit(circuit, operator, time = sign_evo_time*evo_time)
                     pauli_list.append(operator)
-                    
-                    
-                    
+                    coeff_list.append(sign_evo_time)
                     count +=1
+                    
         self.TC_Pauli_List = PauliList(pauli_list)
+        self.TC_coeffs_list = coeff_list
+        
+        
         if return_circuit:
             return circuit.decompose()
+
+
+    def analyse_TC_Hamiltonian(self,number_of_qubits_to_use):
+        """
+        Analyze the energys of the TC Hamiltonian, according to the Hamiltonian defined in define_TC_circuit.
+        Cycles through each unique binary matrix, and computes the expectation values of the Hamiltonian, 
+        which is then compared with which are non-causal sets and should be constrained.
+        """
+        unique_matrices, unique_causal_matrix  = get_unique_matrices(self.n) 
+        expectation_values = []
+        
+        self.number_of_qubits_to_use = number_of_qubits_to_use
+        self.chosen_qubits  = np.random.choice(np.arange(self.q), size=self.number_of_qubits_to_use, replace=False)
+        self.chosen_qubits.sort()
+        print("non chosen qubits: ", np.setdiff1d(np.arange(self.q), self.chosen_qubits))
+        #self.inverted_chosen_qubits = self.chosen_qubits
+        self.inverted_chosen_qubits = self.chosen_qubits
+        print("inverted chosen qubits: ", self.inverted_chosen_qubits)
+        
+        labels_causal = ["".join(str(i) for i in list(np.frombuffer(mat, dtype=np.int32).reshape(self.n, self.n)[np.triu_indices(self.n, 1)])) for mat in unique_causal_matrix]
+        labels = ["".join(str(i) for i in list(np.frombuffer(mat, dtype=np.int32).reshape(self.n, self.n)[np.triu_indices(self.n, 1)])) for mat in unique_matrices]
+        for s in labels:
+            print("--------------------")
+            self.current_s_ = s
+            if s in labels_causal:
+                print("Causal set")
+            else:
+                print("Non-causal set")
+            print("s: ", s)
+            
+            self.define_TC_circuit(gamma_TC= 1, return_circuit= False)
+            op =  SparsePauliOp(self.TC_Pauli_List, self.TC_coeffs_list)
+
+            s_arr = np.array([char for char in s])
+            qc = QuantumCircuit(self.number_of_qubits_to_use)
+            
+            
+            
+            for i, x in enumerate(s_arr[self.chosen_qubits]):
+                if x == "1":
+                    qc.x(i)
+                    
+            
+            
+            # Generate random parameter values for the circuit
+            params = np.random.rand(qc.num_parameters)
+
+            # Create a SparsePauliOp observable
+            obs = op
+
+            # Initialize QulacsEstimator
+            qulacs_estimator = QulacsEstimator()
+
+            # Run the estimation job with the circuit, observable, and parameters
+            job = qulacs_estimator.run(qc, obs, params)
+
+            # Get the result of the job
+            result = job.result()
+
+            # Retrieve the expectation value from the result
+            expectation_value = result.values[0]
+            expectation_values.append(expectation_value)
+            print("expectation value: ", expectation_value)
+            print("not chosen qubit values: ", s_arr[np.setdiff1d(np.arange(self.q), self.chosen_qubits)])
+            print("TC_Pauli_List: ", self.TC_Pauli_List)
+            print("TC coeffs: ", self.TC_coeffs_list)
+        x_ = [int(s,2) for s in labels]
+        print("expectation_values: ", expectation_values)
+        print("x_: ", x_)
+        plt.plot(x_, expectation_values,'o')  
+        plt.scatter([int(s,2) for s in labels_causal],np.ones(len(labels_causal)), marker = "x", color='red', label='Causal Sets')
+        plt.ylabel('Expectation Value')
+        plt.xlabel('Causal Set index')
+        plt.title('Expectation Values of TC Hamiltonian vs Causal Sets')    
+        plt.show()  
+        return expectation_values
+
 
     def define_mixing_circuit(self, gamma_mix: float) -> QuantumCircuit:
         
@@ -667,17 +814,16 @@ class Sampler:
         """
         
         
+            
         evo_time = gamma_mix
-        
         # simple X mixer as in Layden
-        circuit = QuantumCircuit(self.q)
-        for l in range(self.q):         
-            Z_string = np.zeros(self.q)
-            X_string = np.zeros(self.q)
+        circuit = QuantumCircuit(self.number_of_qubits_to_use)
+        for l in range(self.number_of_qubits_to_use):         
+            Z_string = np.zeros(self.number_of_qubits_to_use)
+            X_string = np.zeros(self.number_of_qubits_to_use)
             X_string[l] = 1
             operator = Pauli((Z_string, X_string, 0))
             circuit = self.add_evo_to_circuit(circuit, operator, time = evo_time)
-
         return circuit.decompose()
 
     def add_evo_to_circuit(self, circuit: QuantumCircuit, op:Pauli, time: float = 0.2)-> QuantumCircuit:
@@ -695,7 +841,7 @@ class Sampler:
         """
         
         evo = PauliEvolutionGate(op, time=time)
-        circuit.append(evo, range(self.q))
+        circuit.append(evo, range(self.number_of_qubits_to_use))
         return circuit
 
     def quantum_proposal(self, s: str, multiple: int = 1, output_statevector: bool = False) -> str | list | npt.NDArray:
@@ -713,23 +859,35 @@ class Sampler:
         Returns:
             str or list: If `multiple` is 1, returns a single new bitstring configuration.
                 If `multiple` is greater than 1, returns a list of new bitstring configurations.
+        
         """
+        self.current_s_ = s
+        if self.number_of_qubits_to_use == self.q:
+            self.chosen_qubits = np.arange(self.q)
+            # inverted was to try find a bug, just ignore for now
+            self.inverted_chosen_qubits = self.chosen_qubits#(self.q-1) -self.chosen_qubits[::-1]
+        elif self.number_of_qubits_to_use < self.q:
+            self.chosen_qubits = np.random.choice(np.arange(self.q), size=self.number_of_qubits_to_use, replace=False)
+            self.chosen_qubits = np.sort(self.chosen_qubits)
+            self.inverted_chosen_qubits = self.chosen_qubits#(self.q -1) - self.chosen_qubits
+        else:
+            raise ValueError("number_of_qubits_to_use cannot be greater than the total number of qubits.")
+
         if self.gamma_ranges:
             self.gamma_TC, self.gamma_BD, self.gamma_mixing = self.allocate_gammas_from_ranges()
             #print("chosen gammas: ", self.gamma_TC, self.gamma_BD, self.gamma_mixing)
         if self.is_t_a_range:
             self.t = self.allocate_t_from_range()
             #print("chosen t: ", self.t)
-            
         mixing_circ = self.define_mixing_circuit(gamma_mix= self.gamma_mixing)
         if self.gamma_TC > 0:
             TC_circuit = self.define_TC_circuit(gamma_TC = self.gamma_TC)
         if self.gamma_BD > 0:            
             BD_circuit = self.define_BD_circuit(gamma_BD = self.gamma_BD)
-        
+            
         #set initial state
-        qc = QuantumCircuit(self.q)
-        for i, x in enumerate(s):
+        qc = QuantumCircuit(self.number_of_qubits_to_use)
+        for i, x in enumerate(np.array([char for char in s])[self.chosen_qubits]):
             if x == "1":
                 qc.x(i)
                 
@@ -741,7 +899,6 @@ class Sampler:
         if self.gamma_BD> 0:
             qc.compose(BD_circuit, inplace = True)
         
-
         
         for t in range(self.t):
             #Always mix
@@ -751,7 +908,6 @@ class Sampler:
             if self.gamma_BD>0:
                 qc.compose(BD_circuit, inplace = True)
 
-        
         # Use Qiskit-Qulacs to run the circuit
         backend = QulacsBackend()
 
@@ -763,13 +919,48 @@ class Sampler:
             # Reorder the statevector from little-endian to big-endian
             num_qubits = int(np.log2(len(statevector)))
             statevector = statevector.reshape([2] * num_qubits).transpose(range(num_qubits - 1, -1, -1)).reshape(-1)
-            return statevector
+            
+            
+            # This statevector, if using coarse graining, is only for the chosen qubits
+            # Fill in amplitude = 0 for the other variables, which are not chosen to be qubits
+            # If using coarse graining, pad the statevector with zeros for unchosen qubits
+            if self.number_of_qubits_to_use < self.q:
+                full_dim = 2 ** self.q
+                padded_statevector = np.zeros(full_dim, dtype=statevector.dtype)
+                # Map the chosen qubits' statevector into the full statevector
+                # Only the amplitudes corresponding to the chosen qubits' basis states are filled
+                # The mapping is: for each basis state in chosen qubits, fill the corresponding basis state in full qubits
+                for i in range(len(statevector)):
+                    # Get the bitstring for chosen qubits
+                    chosen_bits = format(i, f'0{self.number_of_qubits_to_use}b')
+                    # Build the full bitstring by placing chosen bits at chosen qubit indices, others are zero
+                    full_bits = ['0'] * self.q
+                    for idx, bit in enumerate(chosen_bits):
+                        full_bits[self.chosen_qubits[idx]] = bit
+                    full_index = int(''.join(full_bits), 2)
+                    padded_statevector[full_index] = statevector[i]
+                return padded_statevector 
+            else:
+                return statevector
         else:
             result = backend.run(qc, shots = multiple).result()
 
             if multiple == 1:
-                s_prime = list(result.data()["counts"].keys())[0]
-                return s_prime[::-1]
+                
+                s_prime_chosen = list(result.data()["counts"].keys())[0]
+                s_prime_chosen = s_prime_chosen[::-1]
+                
+                # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+                #fix coarse graining
+                # CHECK ORDERING OF BITS
+                if self.number_of_qubits_to_use < self.q:
+                    s_prime_all = np.array([char for char in s])
+                    for i, bit in enumerate(s_prime_chosen):
+                        s_prime_all[self.chosen_qubits[i]] = bit
+                    s_prime_all = "".join(str(x) for x in s_prime_all)
+                else:
+                    s_prime_all = s_prime_chosen
+                return s_prime_all
             elif multiple > 1:
                 s_primes_strings = result.data()["counts"].keys()
                 s_primes_counts = list(result.data()["counts"].values())
@@ -777,7 +968,22 @@ class Sampler:
                 s_primes_list = []
                 for i, s_prime in enumerate(s_primes_strings):
                     for _ in range(s_primes_counts[i]):
-                        s_primes_list.append(s_prime[::-1])
+                        s_prime_chosen = s_prime[::-1]
+                        
+                        
+                        # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+                        #fix coarse graining
+                        # CHECK ORDERING OF BITS
+                        if self.number_of_qubits_to_use < self.q:
+                            s_prime_all = np.array([char for char in s])
+                            for i, bit in enumerate(s_prime_chosen):
+                                s_prime_all[self.chosen_qubits[i]] = bit
+                            s_prime_all = "".join(str(x) for x in s_prime_all)
+                        else:
+                            s_prime_all = s_prime_chosen
+
+                        s_primes_list.append(s_prime_all)
+
                 return s_primes_list
 
 
@@ -1104,7 +1310,6 @@ class Sampler:
         # Initial oservables
         bitstring_chain.append(int(s, 2))
         sample_index.append(0)
-        print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
         s_old = calculate_action(causal_matrix = s_mat, smeared = True, stdim = self.dimension, epsilon = self.epsilon, first_order_smearing = False, first_order_taylor = False)#
         if "ordering_fraction" in observables:
             ordering_fractions_list.append(ordering_fraction(s_mat))

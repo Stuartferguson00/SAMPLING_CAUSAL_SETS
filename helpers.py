@@ -376,8 +376,6 @@ def get_upper_triangular_basis(n: int) -> npt.NDArray:
     
     """
     
-    
-    
     q = np.zeros((n,n), dtype = int)
     
     count = int(0)
@@ -386,6 +384,8 @@ def get_upper_triangular_basis(n: int) -> npt.NDArray:
             q[i,j] = count
             count += 1
     return q
+
+
 
 
 def num_relations(matrix: npt.NDArray) -> int:
