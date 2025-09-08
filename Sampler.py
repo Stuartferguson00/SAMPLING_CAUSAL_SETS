@@ -654,9 +654,12 @@ class Sampler:
                             sign_evo_time *= (1-2*int(self.current_s_[basis[one_body_terms[l][0],one_body_terms[l][1]]]))
 
                         operator = Pauli((Z_string, np.zeros(self.number_of_qubits_to_use), one_body_signs[l]))
-                        circuit = self.add_evo_to_circuit(circuit, operator, time = sign_evo_time*evo_time)
-                        pauli_list.append(operator)
-                        coeff_list.append(sign_evo_time)
+                        #circuit = self.add_evo_to_circuit(circuit, operator, time = sign_evo_time*evo_time)
+                        #only add if not identity
+                        if np.any(Z_string==1):
+                            pauli_list.append(operator)
+                            coeff_list.append(sign_evo_time)
+                        
                     
                     two_body_terms = [[[i,j],[j,k]],[[i,j],[i,k]],[[j,k],[i,k]]]
                     two_body_signs = [0,2,2]
@@ -681,9 +684,10 @@ class Sampler:
                             sign_evo_time *= (1-2*int(self.current_s_[basis[two_body_terms[l][1][0],two_body_terms[l][1][1]]]))
                         
                         operator = Pauli((Z_string, np.zeros(self.number_of_qubits_to_use), two_body_signs[l]))
-                        circuit = self.add_evo_to_circuit(circuit, operator, time = sign_evo_time*evo_time)
-                        pauli_list.append(operator)
-                        coeff_list.append(sign_evo_time)
+                        #circuit = self.add_evo_to_circuit(circuit, operator, time = sign_evo_time*evo_time)
+                        if np.any(Z_string==1):
+                            pauli_list.append(operator)
+                            coeff_list.append(sign_evo_time)
                     
                     
                     #three body terms
@@ -712,15 +716,22 @@ class Sampler:
                         sign_evo_time *= (1-2*int(self.current_s_[basis[i,k]]))
 
                     operator = Pauli((Z_string, np.zeros(self.number_of_qubits_to_use), 0))
-                    circuit = self.add_evo_to_circuit(circuit, operator, time = sign_evo_time*evo_time)
-                    pauli_list.append(operator)
-                    coeff_list.append(sign_evo_time)
+                    
+                    
+                    #circuit = self.add_evo_to_circuit(circuit, operator, time = sign_evo_time*evo_time)
+                    
+                    if np.any(Z_string==1):
+                        pauli_list.append(operator)
+                        coeff_list.append(sign_evo_time)
                     count +=1
                     
         self.TC_Pauli_List = PauliList(pauli_list)
         self.TC_coeffs_list = coeff_list
         
         
+        op =  SparsePauliOp(self.TC_Pauli_List, self.TC_coeffs_list)
+        circuit = self.add_evo_to_circuit(circuit, op, time = evo_time)
+
         if return_circuit:
             return circuit.decompose()
 
@@ -814,16 +825,25 @@ class Sampler:
         """
         
         
-            
+        
         evo_time = gamma_mix
         # simple X mixer as in Layden
         circuit = QuantumCircuit(self.number_of_qubits_to_use)
+        pauli_list = []
+        coeff_list = []
         for l in range(self.number_of_qubits_to_use):         
             Z_string = np.zeros(self.number_of_qubits_to_use)
             X_string = np.zeros(self.number_of_qubits_to_use)
             X_string[l] = 1
             operator = Pauli((Z_string, X_string, 0))
             circuit = self.add_evo_to_circuit(circuit, operator, time = evo_time)
+            #circuit.decompose()
+            pauli_list.append(operator)
+            coeff_list.append(1)
+
+        #op =  SparsePauliOp(pauli_list, coeff_list)
+        #circuit = self.add_evo_to_circuit(circuit, op, time = evo_time)
+
         return circuit.decompose()
 
     def add_evo_to_circuit(self, circuit: QuantumCircuit, op:Pauli, time: float = 0.2)-> QuantumCircuit:
@@ -1152,7 +1172,7 @@ class Sampler:
             s_mat = np.zeros((self.n, self.n), dtype=np.int32)
             s = "1" * (self.n * (self.n - 1) // 2)
             s_mat[np.triu_indices(self.n, 1)] = [int(bit) for bit in s]
-        elif type(s) == np.ndarray:
+        elif type(s) is np.ndarray:
             s_mat = np.zeros((self.n, self.n), dtype=np.int32)
             s_mat[np.triu_indices(self.n, 1)] = [int(bit) for bit in s]
             s = "".join(str(bit) for bit in s_mat[np.triu_indices(self.n, 1)])
@@ -1207,14 +1227,20 @@ class Sampler:
             s_prime_mat = np.zeros((self.n, self.n), dtype=np.int32)
             s_prime_mat[np.triu_indices(self.n, 1)] = [int(bit) for bit in s_prime]
             
-            if not is_causal_matrix(s_prime_mat):
-                pass
-            elif s_prime == s:
-                self_move_count += 1
-            else:
+            if self.method == "classical":
                 s = s_prime
                 s_mat = s_prime_mat
                 acceptance_count +=1
+            else:
+                # not all quantum oves are valid causal sets, so need to check
+                if not is_causal_matrix(s_prime_mat):
+                    pass
+                elif s_prime == s:
+                    self_move_count += 1
+                else:
+                    s = s_prime
+                    s_mat = s_prime_mat
+                    acceptance_count +=1
 
 
 
@@ -1239,9 +1265,10 @@ class Sampler:
                     
         end_time = time.time()
         if self.verbose:
-            print("Time taken: ", end_time - start_time, " (per step: ", (end_time - start_time)/steps, ", per sample ", (end_time - start_time)/num_samples, ")")
-            print("acceptance rate: ", acceptance_count/steps)
-            print("self move rate: ", self_move_count/steps)
+            print("Time taken: ", end_time - start_time, " (per step: ", (end_time - start_time)/(steps-1), ", per sample ", (end_time - start_time)/num_samples, ")")
+            print("acceptance rate: ", acceptance_count/(steps-1))
+            print("self move rate: ", self_move_count/(steps-1))
+            print("invalid proposals rate: ", 1 - (acceptance_count + self_move_count)/(steps-1))
         
         
         results = {"bitstring_chain": bitstring_chain, "sample_index": np.array(sample_index)}

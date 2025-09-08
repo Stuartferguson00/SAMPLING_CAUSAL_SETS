@@ -5,6 +5,8 @@ import math
 from typing import List, Tuple, Union, Dict
 import os
 import pickle
+#from tqdm import tqdm
+from tqdm.notebook import tqdm as tqdm
 import numpy.typing as npt
 
 def calc_interval_abundances(causal_matrix: npt.NDArray ) -> npt.NDArray[np.int32]:
@@ -213,15 +215,18 @@ def get_unique_matrices(n:int) -> Tuple[set, set]:
     except:
         num_unique = 2**((n**2-n)//2)
         
+        print("Getting unique matrices of size ", n)
+        
+        
         unique_matrices = set()
-        for bits in product([0, 1], repeat=(n * (n - 1)) // 2):
-            matrix = np.zeros((n, n), dtype = np.int32)
+        for bits in tqdm(product([0, 1], repeat=(n * (n - 1)) // 2), total=2**((n**2-n)//2), desc="Generating all matrices"):
+            matrix = np.zeros((n, n), dtype=np.int32)
             upper_tri_indices = np.triu_indices(n, 1)
             matrix[upper_tri_indices] = bits
             unique_matrices.add(matrix.tobytes())
             dtype_ = matrix.dtype
 
-            
+        print("Getting unique causal matrices of cardinality ", n)
         #print(f"Number of unique matrices: {len(unique_matrices)}")
         if len(unique_matrices) != num_unique:
             raise ValueError(f"Number of unique matrices is not correct. Expected {num_unique}, got {len(unique_matrices)}")
@@ -231,12 +236,9 @@ def get_unique_matrices(n:int) -> Tuple[set, set]:
 
 
 
-        for unique_matrix in unique_matrices:
-            matrix = np.frombuffer(unique_matrix, dtype = dtype_).reshape(n,n)
-
-            unique_matrices.add(matrix.tobytes())
-            
-        
+        for unique_matrix in tqdm(unique_matrices, desc="Filtering for causal matrices"):
+            matrix = np.frombuffer(unique_matrix, dtype=dtype_).reshape(n, n)
+            # unique_matrices.add(matrix.tobytes())  # This line is redundant, already in set
 
             if is_causal_matrix(matrix):
                 unique_causal_matrix.add(matrix.tobytes())
@@ -294,8 +296,37 @@ def get_unique_causal_bitstrings(n:int) -> Tuple[npt.NDArray,npt.NDArray]:
     
     return unique_bitstring_matrices, unique_bitstring_causal_matrices
 
+def calculate_average_action_uniform(cardinality:int, causal_matrices: set, stdim: int = 2, epsilon: float = 0.1) -> float:
+    
+    """
+    Calculate the average action over a set of causal matrices for a uniform distribution.
 
+    Parameters:
+        causal_matrices (set): A set of unique causal matrices.
+        stdim (int, optional): The spacetime dimension. Default is 2.
+        epsilon (float, optional): The epsilon parameter for smearing. Default is 0.1.
+    """
+    save_path = os.path.join(os.getcwd(), "save_files")
+    
+    
+    
+    try:
+        average_action = np.load(os.path.join(save_path, f"average_action_{cardinality}")+".npy")
+        return average_action
+    except:
+        pass
+    
+    
+    total_action = 0
+    for i, matrix in enumerate(causal_matrices):
+        if not is_causal_matrix(matrix):
+            raise ValueError("Matrix is not a causal matrix")
+        action = calculate_action(matrix, stdim = stdim, epsilon = epsilon)
 
+        total_action += action
+    average_action = total_action / len(causal_matrices)
+    np.save(os.path.join(save_path, f"average_action_{cardinality}"+".npy"), average_action)
+    return average_action
 
 def calculate_average_action(cardinality:int, causal_matrices: set, stdim: int = 2, epsilon: float = 0.1, Temp: float = 1) -> float:
     """
@@ -338,6 +369,29 @@ def calculate_average_action(cardinality:int, causal_matrices: set, stdim: int =
         average_action += action * mu
     np.save(os.path.join(save_path, f"average_action_{cardinality}_"+str_temp+".npy"), average_action)
     return average_action
+
+def calculate_uniform_average_action(cardinality: int, causal_bitstrings: npt.NDArray, stdim: int = 2, epsilon: float = 0.1) -> float:
+    """
+    Calculate the average action over all causal sets for a given cardinality,
+    using uniform sampling (ignoring temperature).
+
+    Parameters:
+        cardinality (int): The size of the causal sets.
+        causal_bitstrings (npt.NDArray): Array of bitstrings representing causal matrices.
+        stdim (int, optional): The spacetime dimension. Default is 2.
+        epsilon (float, optional): The epsilon parameter for smearing. Default is 0.1.
+
+    Returns:
+        float: The average action.
+    """
+    actions = []
+    upper_tri_indices = np.triu_indices(cardinality, 1)
+    for bitstring in causal_bitstrings:
+        matrix = np.zeros((cardinality, cardinality), dtype=np.int32)
+        for idx, (i, j) in enumerate(zip(*upper_tri_indices)):
+            matrix[i, j] = int(bitstring[idx])
+        actions.append(calculate_action(matrix, stdim=stdim, epsilon=epsilon))
+    return np.mean(actions)
 
 def calculate_mu(action, partition_function, Temp):
     return np.exp(-action/Temp)/partition_function
@@ -400,6 +454,49 @@ def num_relations(matrix: npt.NDArray) -> int:
     """
     return np.sum(matrix)
 
+def num_relations_histogram(causal_matrices: List[npt.NDArray]) -> Tuple[npt.NDArray, npt.NDArray]:
+    """
+    Computes the histogram of the number of relations for a list of causal matrices.
+
+    Parameters:
+        causal_matrices (List[npt.NDArray]): List of causal matrices.
+
+    Returns:
+        Tuple[npt.NDArray, npt.NDArray]: bins (unique number of relations), counts (number of matrices with each number of relations).
+    """
+    num_rels = [num_relations(matrix) for matrix in causal_matrices]
+    bins, counts = np.unique(num_rels, return_counts=True)
+    return bins, counts
+
+
+
+def height_histogram(causal_matrices: List[npt.NDArray]) -> Tuple[npt.NDArray, npt.NDArray]:
+    """
+    Computes the histogram of heights for a list of causal matrices.
+
+    Parameters:
+        causal_matrices (List[npt.NDArray]): List of causal matrices.
+
+    Returns:
+        Tuple[npt.NDArray, npt.NDArray]: bins (unique heights), counts (number of matrices with each height).
+    """
+    heights = [height(matrix) for matrix in causal_matrices]
+    bins, counts = np.unique(heights, return_counts=True)
+    return bins, counts
+
+
+def calculate_average_height_uniform(causal_matrices: List[npt.NDArray]) -> float:
+    """
+    Calculate the average height over a list of causal matrices using uniform sampling.
+
+    Parameters:
+        causal_matrices (List[npt.NDArray]): List of causal matrices.
+
+    Returns:
+        float: The average height.
+    """
+    heights = [height(matrix) for matrix in causal_matrices]
+    return np.mean(heights)
 
 def height(matrix: npt.NDArray) -> int:
     """
